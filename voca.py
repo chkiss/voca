@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # coding = utf-8
 """Properly name files of TV episodes using the TVmaze API."""
 __author__ = "Chas Kissick"
@@ -14,7 +14,8 @@ import json
 import itertools
 
 ### TODO:
-# Complete implementation of missingseasons
+# Do testing of missingseasons
+# Fix bug: file named 'episode11' is not sorted properly, comes before 'episode2'
 # add log feature
 # add "reverse" option
 
@@ -27,8 +28,8 @@ parser.add_argument('--link','-l',
         help='the link to the show ID on tvmaze.com or api.tvmaze.com')
 parser.add_argument('--filetype','-f',
         nargs='?',
-        default='.mkv',
-        help='the filetype that the script should look at. Default is mkv.')
+        help='the filetype that the script should look at. By default, the \
+                program will search for mkv, mp4 and avi files.')
 parser.add_argument('--name','-n',
         help='the exact name of the show to search. Do not include any extra \
                 information , e.g. you can use "The Office" but not "The Office\
@@ -41,14 +42,17 @@ parser.add_argument('--assume_season','-S',
         action='store_true',
         help='Assumes that season folders sorted by alphanumeric order follow \
                 the order of the series. Default is to ask the user for each \
-                season number before guessing, \
-                unless the folder follows the naming convention "Season XX"')
+                season number before guessing, unless the folder matches the \
+                format "Season XX"')
 parser.add_argument('--ignore', '-x',
         nargs='?',
         help='ignores any folder whose name is contained within this string or \
                 list of strings (separated by a space). Accepts folder names, \
                 not a full path. Example: voca.py -x miniseries webisodes \
                 "/TV/Battlestar Galactica"')
+parser.add_argument('--gentle', '-g',
+        action='store_true',
+        help='disables the renaming of any folders')
 parser.add_argument('--preview', '-p',
         action='store_true',
         help='preview rename before executing')
@@ -74,9 +78,12 @@ showid = args.showid or False
 link = args.link or ('http://api.tvmaze.com/shows/'+str(showid)+'/episodes' \
         if showid else False)
 filetype = args.filetype
+if not filetype.startswith('.'):
+    filetype = '.'+filetype
 season = args.season[0] if args.season else False
 sprompt = False if args.assume_season else True
 ignore = args.ignore or []
+gentle = args.gentle
 preview = args.preview
 manual = args.manual
 verbose = args.verbose or preview
@@ -106,13 +113,21 @@ def get_titles(showid,season):
 
 def seasonprompt(folder, missingseasons):
     print('What season is contained in this folder?: %s'%folder)
-    print('Possible seasons: ',missingseasons)
     while True:
-        season = input('\nPlease enter an integer from the above selection: ')
+        print('Possible seasons: ',missingseasons)
+        season = input('Please enter an integer from the above selection, '\
+                'or type Q to ignore this directory: ')
         try:
             season = int(season)
-            break
         except ValueError:
+            if season in ('Q','q','N','n'):
+                return False
+            else:
+                pass
+        if season in missingseasons:
+            break
+        else:
+            print('That choice is not valid!')
             pass
     return season
 
@@ -135,10 +150,8 @@ def rename(old_names,titles):
                         %(old_names[i],i+1,titles[i],filetype))
                 if preview: continue
                 else:
-                    print(os.getcwd())
                     os.rename(old_names[i], '%02d %s%s'\
                             %(i+1,titles[i],filetype))
-            i += 1
         return False
     elif len(old_names) > len(titles):
         return 1
@@ -152,14 +165,17 @@ def weed_files(files,filetype):
             pass
         else:
             files.remove(f)
-            print('Ignoring %s'%(f))
+            print('Ignoring %s - wrong filetype'%(f))
     return files
 
 
 def weed_folders(directory):
     for d in directory[:]:
         if 'extras' in d.lower() or 'subs' in d.lower():
-            directory.remove(folder)
+            directory.remove(d)
+        if ignore:
+            if ignore in d.lower():
+                directory.remove(d)
         directory.sort()
         return directory
 
@@ -208,10 +224,12 @@ def get_showID(directory):
         else:
             for n in range(len(choices)):
                 print('\n\033[1mChoice %d: \n%s\033[0m\
-                        \n%s\n%s\n%s - %s\nMatch:%d\n-------------------'\
+                        \n%s\n%s\nPremiere: %s\n%s - %s\nMatch:%d\
+                        \n-----------------------------'\
                         %(n+1,choices[n]['series'],\
                         choices[n]['language'],\
                         choices[n]['genre'],\
+                        choices[n]['premiere'],\
                         choices[n]['country'],choices[n]['network'],
                         scores[n]))
                 if len(choices) < 3:
@@ -232,7 +250,7 @@ def get_show_data(showid):
     data = {'series':series['name'],\
         'language':series['language'],\
         'genre':', '.join(series['genres']) or '- missing data -',\
-        'id':series['id']}
+        'id':series['id'], 'premiere':series['premiered']}
     try:
         data['country'] = series['network']['country']['name']
         data['network'] = series['network']['name']
@@ -243,12 +261,12 @@ def get_show_data(showid):
     return data
 
 
-def get_seasons(showid)
+def get_seasons(showid):
     link = 'http://api.tvmaze.com/shows/'+str(showid)+'/seasons'
     seasondata = scrape_page(link)
-    totalseasons = list(range(len(totalseasons)))
-    totalseasons = [i+1 for i in missingseasons]
-    return total
+    totalseasons = list(range(len(seasondata)))
+    totalseasons = [i+1 for i in totalseasons]
+    return totalseasons
 
 def process_directories(root):
     os.chdir (root)
@@ -275,7 +293,9 @@ def process_directories(root):
                 foundseason = int(parent[-2:])
             else:
                 foundseason = seasonprompt(parent)
-        print(parent)
+        if not filetype:
+            get_filetype(files)
+        print('\033[1m%s'%parent)
         execute(path,showid or foundshowid,season or foundseason)
 # If it contains seasons, rename the folders and go through each
     elif levels == 1:
@@ -284,29 +304,43 @@ def process_directories(root):
         if not showid:
             foundshowid = get_showID(path)
         missingseasons = get_seasons(showid or foundshowid)
+        print(missingseasons)
         folders.sort()
+        # Count up the seasons to see what is missing before doing anything
         for folder in folders:
             if folder.lower().startswith('season') and len(folder) == 9:
-                madeseason = int(folder[-2:])+1
+                madeseason = int(folder[-2:])
                 missingseasons.remove(madeseason)
+                print(missingseasons)
         for folder in folders:
-            print(folder)
+            print('\033[1m%s\033[0m'%folder)
             if folder in ignore:
                 print('Ignoring %s'%folder)
                 continue
             if folder.lower().startswith('season'):
                 foundseason = int(folder[-2:])
-                sd = folder
+                if gentle or preview:
+                    sd = folder
+                else:
+                    sd = 'Season %02d'%(foundseason)
+                    shutil.move(folder,sd)
+                    sd = path+'/'+sd
                 execute(sd,showid or foundshowid,foundseason)
-                os.chdir('..')
             else:
                 if sprompt:
                     foundseason = seasonprompt(folder, missingseasons)
-                sd = 'Season %02d'%(foundseason or madeseason) 
-                shutil.move(folder,sd)
-                sd = path+'/'+sd
+                if not foundseason:
+                    print('Ignoring %s'%folder)
+                    continue
+                else:
+                    missingseasons.remove(foundseason)
+                if gentle or preview:
+                    sd = folder
+                else:
+                    sd = 'Season %02d'%(foundseason or madeseason) 
+                    shutil.move(folder,sd)
+                    sd = path+'/'+sd
                 execute(sd,showid or foundshowid,season)
-                os.chdir('..')
                 madeseason += 1
 # If it contains whole series or greater, recurse through each subfolder:
     elif levels > 1:
@@ -316,9 +350,13 @@ def process_directories(root):
 
 def execute(sd,showid,season):
     old_names = get_old_names(sd)
+    if len(old_names) == 0:
+        print('No valid files found in this directory! Skipping season.')
+        return None
     titles = get_titles(showid,season)
     os.chdir(sd)
     failure = rename(old_names,titles)
+    os.chdir('..')
     if not failure:
         return None
     else:
@@ -326,9 +364,9 @@ def execute(sd,showid,season):
         if failure == 1:
             print('\033[31m\033[1m\nError: More files than episodes! Please '\
                     'verify that the correct series/season is: \n'
-                    '\033[0m\033[1m%s\n\033[0m%s\n%s\n%s - %s'\
+                    '\033[0m\033[1m%s\n\033[0m%s\n%s\nPremiere: %s\n%s - %s'\
                     %(show['series'],show['language'],show['genre'],\
-                    show.get('country'),show['network']))
+                    show['premiere'],show.get('country'),show['network']))
             print('\nSeason %02d'%season)
             print('\033[1m\nTitle - File:\033[0m')
             for title,name in itertools.zip_longest(titles,old_names):
@@ -337,9 +375,9 @@ def execute(sd,showid,season):
             print('\033[31m\033[1m\nError: Fewer files than episodes! Are you '\
                     'missing data or is the wrong series/season selected? '\
                     '\nOperation canceled. Series: \n'
-                    '\033[0m\033[1m%s\n\033[0m%s\n%s\n%s - %s'\
+                    '\033[0m\033[1m%s\n\033[0m%s\n%s\nPremiere: %s\n%s - %s'\
                     %(show['series'],show['language'],show['genre'],\
-                    show.get('country'),show['network']))
+                    show['premiere'],show.get('country'),show['network']))
             print('\nSeason %02d'%season)
             print('\033[1m\nTitle - File:\033[0m')
             for title,name in itertools.zip_longest(titles,old_names):
