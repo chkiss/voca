@@ -3,7 +3,7 @@
 """Properly name files of TV episodes using the TVmaze API."""
 __author__ = "Chas Kissick"
 __license__ = "GNU General Public License v3.0"
-__version__ = "0.1"
+__version__ = "0.11"
 
 import os
 import sys
@@ -14,12 +14,19 @@ import json
 import itertools
 
 ### TODO:
+# add I ignore option that ignores missing episodes (e.g. \
+#        if two episodes are combined into one file)
 # add log feature
 # add "reverse" option
+# add try import html2text?
 
 # Parse arguments
 parser = argparse.ArgumentParser(description='Properly name files of TV \
         episodes.')
+parser.add_argument('--query','-q',
+        action='store_true',
+        help='Queries the database for show info if a number is input, \
+                otherwise queries the database with the search term.')
 parser.add_argument('--showid','-i',
         help='the show ID on tvmaze.com')
 parser.add_argument('--link','-l',
@@ -36,6 +43,12 @@ parser.add_argument('--season','-s',
         type=int,
         help='the season of episodes being edited. Default is determined by the\
                 directory name, otherwise asked of the user or assumed to be 1.')
+parser.add_argument('--append','-a',
+        nargs=2,
+        help='append a word to certain episode titles. \
+                \nExample: voca.py -a " (Extended) 12,18,19" will add \
+                " (Extended)" to the end of the filenames of episodes \
+                12, 18 and 19.')
 parser.add_argument('--assume_season','-S',
         action='store_true',
         help='Assumes that season folders sorted by alphanumeric order follow \
@@ -72,6 +85,7 @@ parser.add_argument('dir',
         help='the directory in which the files to be renamed are located. \
                 Default is current directory.')
 args = parser.parse_args()
+query = args.query
 showid = args.showid or False
 link = args.link or ('http://api.tvmaze.com/shows/'+str(showid)+'/episodes' \
         if showid else False)
@@ -79,7 +93,10 @@ filetype = args.filetype
 if filetype:
     if not filetype.startswith('.'):
         filetype = '.'+filetype
-season = args.season[0] if args.season else False
+season = args.season if args.season else False
+if args.append:
+    appender = args.append[0]
+    appendees = args.append[1]
 sprompt = False if args.assume_season else True
 ignore = args.ignore or []
 gentle = args.gentle
@@ -109,10 +126,22 @@ def get_titles(showid,season):
     for episode in data:
         if episode['season'] == season:
             title = episode['name']
-            filename = ''.join([c if c not in "\/:*?<>|" else '_' \
+            filesafe = ''.join([c if c not in "\/:*?<>|" else '_' \
                     for c in title])
-            titles.append(filename)
+            titles.append(filesafe)
     return(titles)
+
+
+def get_filenames(titles,filetype):
+    filenames = []
+    appendeelist = appendees.split(',')
+    for appendee in appendeelist:
+        appendee = int(appendee)
+        titles[appendee-1] = titles[appendee-1]+appender
+    for i in range(len(titles)):
+        filename = '%02d %s%s'%(i+1,titles[i],filetype)
+        filenames.append(filename)
+    return(filenames)
 
 
 def seasonprompt(folder, missingseasons):
@@ -136,8 +165,8 @@ def seasonprompt(folder, missingseasons):
     return season
 
 
-def rename(old_names,titles,filetype):
-    if len(old_names) == len(titles):
+def rename(old_names,filenames):
+    if len(old_names) == len(filenames):
 #        if reverse:
 #            for i in range(0, len(old_names)):
 #                os.rename('%s%s%s'%(j,titles[i],filetype), old_names[i])
@@ -147,19 +176,18 @@ def rename(old_names,titles,filetype):
 #                i += 1
 #        else:
         for i in range(len(old_names)):
-            if old_names[i] == '%02d %s%s'%(i+1,titles[i],filetype):
+            if old_names[i] == filenames[i]:
                 print(old_names[i]+'- unchanged')
             else:
-                print('\033[37m%s >\n\033[32m%02d %s%s\033[0m'\
-                        %(old_names[i],i+1,titles[i],filetype))
+                print('\033[37m%s >\n\033[32m%s\033[0m'\
+                        %(old_names[i],filenames[i]))
                 if preview: continue
                 else:
-                    os.rename(old_names[i], '%02d %s%s'\
-                            %(i+1,titles[i],filetype))
+                    os.rename(old_names[i],filenames[i])
         return False
-    elif len(old_names) > len(titles):
+    elif len(old_names) > len(filenames):
         return 1
-    elif len(old_names) < len(titles):
+    elif len(old_names) < len(filenames):
         return 2
 
 
@@ -222,7 +250,7 @@ def get_showID(directory):
     # Search using the directory name
         searchterm = os.path.split(directory)[1]
         searchlink = 'http://api.tvmaze.com/search/shows?q=:'+searchterm
-        print(searchlink)
+        #print(searchlink)
         results = scrape_page(searchlink)
         if bool(results) == False:
             print('\n\033[31m\033[1mNo search results for term: "%s"!'\
@@ -240,9 +268,14 @@ def get_showID(directory):
             choice = choices[0]
         else:
             for n in range(len(choices)):
-                print('\n\033[1mChoice %d:'%(n+1))
+                if query:
+                    pass
+                else:
+                    print('\n\033[1mChoice %d:'%(n+1))
                 print_show_data(choices[n],scores[n])
-                print('-----------------------------')
+                print('-------------------------------------------------------')
+            if query:
+                return
             if len(choices) < 3:
                 print('No other choices.')
             while True:
@@ -265,30 +298,44 @@ def get_showID(directory):
 
 def get_show_data(showid):
     link = 'http://api.tvmaze.com/shows/'+str(showid)
-    print(link)
+    #print(link)
     series = scrape_page(link)
     data = {'series':series['name'],\
         'language':series['language'],\
         'genre':', '.join(series['genres']) or '- missing data -',\
         'id':series['id'], 'premiere':series['premiered']}
+    # Web shows by e.g. Netflix have no country
     try:
         data['country'] = series['network']['country']['name']
         data['network'] = series['network']['name']
-    # Web shows by e.g. Netflix have no country
     except TypeError:
         data['country'] = 'Online'
         data['network'] = series['webChannel']['name']
+    summ = series['summary']
+    while '<p>' in summ:
+        summ = summ.replace('<p>','')
+        summ = summ.replace('</p>','\n')
+    while '<b>' in summ:
+        summ = summ.replace('<b>','\033[1m')
+        summ = summ.replace('</b>','\033[0m')
+    summ = summ.replace('&nbsp;',' ')
+    summ = summ.replace('&amp;','&')
+    #while '<' in summ or '>' in summ:
+    #    summ = summ.replace(summ[summ.find('<'):summ.find('>')+1],'')
+    data['summary'] = summ
     return data
 
 
 def print_show_data(series,score):
     print('\033[1m%s\033[0m (id: %s)\
-            \n%s\n%s\nPremiere: %s\n%s - %s'
+            \n%s\n%s\nPremiere: %s\n%s - %s\
+            \n\033[1mSummary: \033[0m%s'
             %(series['series'],series['id'],\
             series['language'],\
             series['genre'],\
             series['premiere'],\
-            series['country'],series['network']))
+            series['country'],series['network'],\
+            series['summary']))
     if score:
         print('Match:%d'%score)
 
@@ -331,7 +378,7 @@ def process_directories(root):
                 foundseason = int(parent[-2:])
             else:
                 foundseason = seasonprompt(parent,missingseasons)
-        print('\033[1m%s'%parent)
+        print('\033[1m%s\033[0m'%parent)
         execute(path,showid or foundshowid,season or foundseason)
 # If it contains seasons, rename the folders and go through each
     elif levels == 1:
@@ -388,8 +435,9 @@ def execute(sd,showid,season):
         print('No valid files found in this directory! Skipping season.')
         return None
     titles = get_titles(showid,season)
+    filenames = get_filenames(titles,ext)
     os.chdir(sd)
-    failure = rename(old_names,titles,ext)
+    failure = rename(old_names,filenames)
     os.chdir('..')
     if not failure:
         return None
@@ -410,8 +458,15 @@ def execute(sd,showid,season):
             print(title,' - ',name)
         print()
 
-
-process_directories(wd)
+if query:
+    try:
+        wd = int(wd)
+        data = get_show_data(wd)
+        print_show_data(data, None)
+    except ValueError:
+        get_showID(wd)
+else:
+    process_directories(wd)
 
 if preview:
     print('\033[0mSimulation Complete.')
