@@ -19,6 +19,7 @@ import itertools
 # add log feature
 # add "reverse" option
 # add try import html2text?
+# flesh out "verbose" function, possibly with custom printing function that takes text and priority
 
 # Parse arguments
 parser = argparse.ArgumentParser(description='Properly name files of TV \
@@ -42,7 +43,7 @@ parser.add_argument('--name','-n',
 parser.add_argument('--season','-s',
         type=int,
         help='the season of episodes being edited. Default is determined by the\
-                directory name, otherwise asked of the user or assumed to be 1.')
+                directory name, otherwise prompted for  or assumed to be 1.')
 parser.add_argument('--append','-a',
         nargs=2,
         help='append a word to certain episode titles. \
@@ -78,7 +79,8 @@ parser.add_argument('--disable_backup','-b',
         action='store_true',
         help='By default, the program saves logs of old filenames from each \
                 folder in the backup directory. Enabling this option \
-                makes it impossible to later use the --undo (z) option.')
+                makes it impossible to later use the --undo (z) option. \
+                Note: not yet implemented.')
 parser.add_argument('dir',
         nargs='?',
         default=os.getcwd(),
@@ -93,10 +95,13 @@ filetype = args.filetype
 if filetype:
     if not filetype.startswith('.'):
         filetype = '.'+filetype
+name = args.name if args.name else False
 season = args.season if args.season else False
 if args.append:
     appender = args.append[0]
     appendees = args.append[1]
+else:
+    appendees = []
 sprompt = False if args.assume_season else True
 ignore = args.ignore or []
 gentle = args.gentle
@@ -134,10 +139,11 @@ def get_titles(showid,season):
 
 def get_filenames(titles,filetype):
     filenames = []
-    appendeelist = appendees.split(',')
-    for appendee in appendeelist:
-        appendee = int(appendee)
-        titles[appendee-1] = titles[appendee-1]+appender
+    if appendees:
+        appendeelist = appendees.split(',')
+        for appendee in appendeelist:
+            appendee = int(appendee)
+            titles[appendee-1] = titles[appendee-1]+appender
     for i in range(len(titles)):
         filename = '%02d %s%s'%(i+1,titles[i],filetype)
         filenames.append(filename)
@@ -248,12 +254,14 @@ def get_showID(directory):
         return foundshowid
     else:
     # Search using the directory name
-        searchterm = os.path.split(directory)[1]
+        if name:
+            searchterm = name
+        else:
+            searchterm = os.path.split(directory)[1]
         searchlink = 'http://api.tvmaze.com/search/shows?q=:'+searchterm
-        #print(searchlink)
         results = scrape_page(searchlink)
         if bool(results) == False:
-            print('\n\033[31m\033[1mNo search results for term: "%s"!'\
+            print('\033[31m\033[1mNo search results for term: "%s"!'\
                     %searchterm)
             sys.exit()
         # Grab the score of the first three results and compare them
@@ -262,9 +270,9 @@ def get_showID(directory):
         for series in results[:3]:
             scores.append(series['score'])
             choices.append(get_show_data(series['show']['id']))
-        if not manual and len(choices) == 1:
+        if not manual and not query and len(choices) == 1:
             choice = choices[0]
-        elif not manual and scores[0]-scores[1] > 10:
+        elif not manual and not query and scores[0]-scores[1] > 10:
             choice = choices[0]
         else:
             for n in range(len(choices)):
@@ -359,7 +367,11 @@ def process_directories(root):
 # See how many levels of directories exist until the files, assuming 
 # shows/seasons/episodes
     levels = 0
-    while (not files) or (not files[0].endswith(filetypes)):
+    while (not files) or (not (files[0].endswith(filetype)) or \
+            (files[0].endswith(filetypes))):
+        print(files)
+        print(files[0].endswith(filetype))
+        print(files[0].endswith(filetypes))
         folders = weed_folders(folders)
         if not folders: return
         os.chdir(folders[0])
@@ -377,7 +389,11 @@ def process_directories(root):
             if parent.lower().startswith('season'):
                 foundseason = int(parent[-2:])
             else:
-                foundseason = seasonprompt(parent,missingseasons)
+                missingseasons = get_seasons(showid or foundshowid)
+                if len(missingseasons) == 1:
+                    foundseason = missingseasons[0]
+                else:
+                    foundseason = seasonprompt(parent,missingseasons)
         print('\033[1m%s\033[0m'%parent)
         execute(path,showid or foundshowid,season or foundseason)
 # If it contains seasons, rename the folders and go through each
