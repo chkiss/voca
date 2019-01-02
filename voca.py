@@ -95,6 +95,8 @@ filetype = args.filetype
 if filetype:
     if not filetype.startswith('.'):
         filetype = '.'+filetype
+else:
+    filetype = '.mkv'
 name = args.name if args.name else False
 season = args.season if args.season else False
 if args.append:
@@ -358,6 +360,7 @@ def get_seasons(showid):
 
 def process_directories(root):
     os.chdir(root)
+    root = os.getcwd()
     path, folders, files = next(os.walk(root))
     rootpath = path
     rootfolders = weed_folders(folders)
@@ -367,11 +370,8 @@ def process_directories(root):
 # See how many levels of directories exist until the files, assuming 
 # shows/seasons/episodes
     levels = 0
-    while (not files) or (not (files[0].endswith(filetype)) or \
-            (files[0].endswith(filetypes))):
-        print(files)
-        print(files[0].endswith(filetype))
-        print(files[0].endswith(filetypes))
+    while (not files) or (not files[0].endswith(filetype)) or \
+            (not files[0].endswith(filetypes)):
         folders = weed_folders(folders)
         if not folders: return
         os.chdir(folders[0])
