@@ -260,6 +260,7 @@ def get_showID(directory):
             searchterm = name
         else:
             searchterm = os.path.split(directory)[1]
+        print('Search term: %s'%searchterm)
         searchlink = 'http://api.tvmaze.com/search/shows?q=:'+searchterm
         results = scrape_page(searchlink)
         if bool(results) == False:
@@ -364,18 +365,28 @@ def process_directories(root):
     path, folders, files = next(os.walk(root))
     rootpath = path
     rootfolders = weed_folders(folders)
-    files,ext = weed_files(files, filetype)
-    if files == False:
-        print('No video files found in %s'%(path))
+#    files,ext = weed_files(files, filetype)
+#    if files == False:
+#        print('No video files found in %s'%(path))
 # See how many levels of directories exist until the files, assuming 
 # shows/seasons/episodes
     levels = 0
-    while (not files) or (not files[0].endswith(filetype)) or \
-            (not files[0].endswith(filetypes)):
+    validfiles = 0
+    for fil in files:
+        if fil.endswith(filetype or filetypes):
+            validfiles = 1
+            break
+    while (not files) or (not files[0].endswith(filetype or filetypes)\
+            or (not validfiles)):
         folders = weed_folders(folders)
-        if not folders: return
+        if not folders: break
         os.chdir(folders[0])
         path, folders, files = next(os.walk(os.getcwd()))
+        for fil in files:
+            if fil.endswith(filetype or filetypes):
+                validfiles = 1
+                break
+        print(path)
         levels += 1
 # If it contains episodes, process them
     if levels == 0:
