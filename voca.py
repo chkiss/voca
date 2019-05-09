@@ -12,6 +12,7 @@ import argparse
 import requests
 import json
 import itertools
+import logging
 
 ### TODO:
 # add I ignore option that ignores missing episodes (e.g. \
@@ -95,8 +96,6 @@ filetype = args.filetype
 if filetype:
     if not filetype.startswith('.'):
         filetype = '.'+filetype
-else:
-    filetype = '.mkv'
 name = args.name if args.name else False
 season = args.season if args.season else False
 if args.append:
@@ -110,12 +109,27 @@ gentle = args.gentle
 preview = args.preview
 manual = args.manual
 verbose = args.verbose or preview
+logging = False if args.disable_backup else True
 wd = args.dir.rstrip('/')
 
-filetypes = ('.mkv','.mp4','.avi')
+filetypes = ('.mkv','.mp4','.avi','.srt')
+
+def log(old_names,filenames):
+    entry = dict(zip(old_names,filenames))
+    #if not os.path.exists('/var/log/Voca/'):
+    #    os.mkdir('/var/log/Voca/')
+    #latest = open('/var/log/Voca/latest.txt', 'w+')
+    #json.dump(entry,latest)
+    #latest.close()
+    #log = open('/var/log/Voca/log.txt', 'a')
+    #latest = open('/var/log/Voca/latest.txt', 'r')
+    #log.write(latest.read())
+    #log.close()
+    #logging.basicConfig(filename='voca.log',level=logging.INFO)
+    #logging.info(entry)
 
 def get_old_names(directory):
-    (_, _,old_names) = next(os.walk(directory)) 
+    (_, _,old_names) = next(os.walk(directory))
     old_names,ext = weed_files(old_names,filetype)
     try:
         old_names.sort(key=lambda c: int(''.join(filter(str.isdigit, c))))
@@ -173,7 +187,7 @@ def seasonprompt(folder, missingseasons):
     return season
 
 
-def rename(old_names,filenames):
+def rename(old_names,filenames,subs_present,old_subnames,subnames):
     if len(old_names) == len(filenames):
 #        if reverse:
 #            for i in range(0, len(old_names)):
@@ -192,6 +206,20 @@ def rename(old_names,filenames):
                 if preview: continue
                 else:
                     os.rename(old_names[i],filenames[i])
+        if subs_present:
+            os.chdir('subs')
+            print('\033[m/subs')
+            for i in range(len(old_names)):
+                if old_subnames[i] == subnames[i]:
+                        print(old_subnames[i]+'- unchanged')
+                else:
+                    print('\033[37m%s >\n\033[32m%s\033[0m'\
+                            %(old_subnames[i],subnames[i]))
+                    if preview: continue
+                    else:
+                        os.rename(old_names[i],subnames[i])
+            subs_present = False
+            os.chdir('..')
         return False
     elif len(old_names) > len(filenames):
         return 1
@@ -463,11 +491,18 @@ def execute(sd,showid,season):
         return None
     titles = get_titles(showid,season)
     filenames = get_filenames(titles,ext)
+    subs_present = False
+    old_subnames = []
+    subnames = []
+    if os.path.exists(sd+'/subs/'):
+        subs_present = True
+        old_subnames,subext = get_old_names(sd+'/subs/')
+        subnames = get_filenames(titles,subext)
     os.chdir(sd)
-    failure = rename(old_names,filenames)
+    failure = rename(old_names,filenames,subs_present,old_subnames,subnames)
     os.chdir('..')
     if not failure:
-        return None
+        log(old_names,filenames)
     else:
         show = get_show_data(showid)
         if failure == 1:
