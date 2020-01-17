@@ -63,6 +63,9 @@ parser.add_argument('--ignore', '-x',
                 list of strings (separated by a space). Accepts folder names, \
                 not a full path. Example: voca.py -x miniseries webisodes \
                 "/TV/Battlestar Galactica"')
+parser.add_argument('--jumbled','-j',
+        action='store_true',
+        help='if files are not in alphabetical order, tries to sort by number')
 parser.add_argument('--gentle', '-g',
         action='store_true',
         help='disables the renaming of any folders')
@@ -105,6 +108,7 @@ else:
     appendees = []
 sprompt = False if args.assume_season else True
 ignore = args.ignore or []
+jumbled = args.jumbled
 gentle = args.gentle
 preview = args.preview
 manual = args.manual
@@ -131,11 +135,13 @@ def log(old_names,filenames):
 def get_old_names(directory):
     (_, _,old_names) = next(os.walk(directory))
     old_names,ext = weed_files(old_names,filetype)
-    try:
-        old_names.sort(key=lambda c: int(''.join(filter(str.isdigit, c))))
-    except:
-        print('\033[31m\033[1m''Error: files may not be sorted correctly. '\
-                'Please check:\033[0m')
+    if jumbled:
+        try:
+            old_names.sort(key=lambda c: int(''.join(filter(str.isdigit, c))))
+        except:
+            print('\033[31m\033[1m''Error: files may not be sorted correctly. '\
+                    'Please check:\033[0m')
+    else:
         old_names.sort()
     return (old_names,ext)
 
