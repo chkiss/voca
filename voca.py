@@ -21,6 +21,7 @@ import logging
 # add "reverse" option
 # add try import html2text?
 # flesh out "verbose" function, possibly with custom printing function that takes text and priority
+# allow for multiple filetypes in the same folder, as long as they are video filetypes
 
 # Parse arguments
 parser = argparse.ArgumentParser(description='Properly name files of TV \
@@ -357,17 +358,20 @@ def get_show_data(showid):
         data['country'] = 'Online'
         data['network'] = series['webChannel']['name']
     summ = series['summary']
-    while '<p>' in summ:
-        summ = summ.replace('<p>','')
-        summ = summ.replace('</p>','\n')
-    while '<b>' in summ:
-        summ = summ.replace('<b>','\033[1m')
-        summ = summ.replace('</b>','\033[0m')
-    summ = summ.replace('&nbsp;',' ')
-    summ = summ.replace('&amp;','&')
-    #while '<' in summ or '>' in summ:
-    #    summ = summ.replace(summ[summ.find('<'):summ.find('>')+1],'')
-    data['summary'] = summ
+    if(summ):
+        while '<p>' in summ:
+            summ = summ.replace('<p>','')
+            summ = summ.replace('</p>','\n')
+        while '<b>' in summ:
+            summ = summ.replace('<b>','\033[1m')
+            summ = summ.replace('</b>','\033[0m')
+        summ = summ.replace('&nbsp;',' ')
+        summ = summ.replace('&amp;','&')
+        #while '<' in summ or '>' in summ:
+        #    summ = summ.replace(summ[summ.find('<'):summ.find('>')+1],'')
+        data['summary'] = summ
+    else:
+        data['summary'] = "No summary available"
     return data
 
 
