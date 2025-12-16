@@ -24,46 +24,50 @@ import logging
 # allow for multiple filetypes in the same folder, as long as they are video filetypes
 
 # Parse arguments
-parser = argparse.ArgumentParser(description='Properly name files of TV \
-        episodes.')
+parser = argparse.ArgumentParser(description=('Properly name files of TV episodes.'))
 parser.add_argument('--query','-q',
         action='store_true',
-        help='Queries the database for show info if a number is input, \
-                otherwise queries the database with the search term.')
+        help=('Queries the database for show info if a number is input, otherwise queries the database with the search term.'))
 parser.add_argument('--showid','-i',
         help='the show ID on tvmaze.com')
 parser.add_argument('--link','-l',
         help='the link to the show ID on tvmaze.com or api.tvmaze.com')
 parser.add_argument('--filetype','-f',
         nargs='?',
-        help='the filetype that the script should look at. By default, the \
-                program will search for mkv, mp4 and avi files.')
+        help=(
+            'the filetype that the script should look at. By default, the '
+            'program will search for mkv, mp4 and avi files.'))
 parser.add_argument('--name','-n',
-        help='the exact name of the show to search. Do not include any extra \
-                information , e.g. you can use "The Office" but not "The Office\
-                 (US)" or "The Office (UK)"')
+        help=(
+            'the exact name of the show to search. Do not include any extra '
+            'information , e.g. you can use "The Office" but not "The Office '
+            '(US)" or "The Office (UK)"'))
 parser.add_argument('--season','-s',
         type=int,
-        help='the season of episodes being edited. Default is determined by the\
-                directory name, otherwise prompted for  or assumed to be 1.')
+        help=(
+            'the season of episodes being edited. Default is determined by the '
+            'directory name, otherwise prompted for  or assumed to be 1.'))
 parser.add_argument('--append','-a',
         nargs=2,
-        help='append a word to certain episode titles. \
-                \nExample: voca.py -a " (Extended) 12,18,19" will add \
-                " (Extended)" to the end of the filenames of episodes \
-                12, 18 and 19.')
+        help=(
+            'append a word to certain episode titles. '
+            '\nExample: voca.py -a " (Extended) 12,18,19" will add '
+            '" (Extended)" to the end of the filenames of episodes '
+            '12, 18 and 19.'))
 parser.add_argument('--assume_season','-S',
         action='store_true',
-        help='Assumes that season folders sorted by alphanumeric order follow \
-                the order of the series. Default is to ask the user for each \
-                season number before guessing, unless the folder matches the \
-                format "Season XX"')
+        help=(
+            'Assumes that season folders sorted by alphanumeric order follow '
+            'the order of the series. Default is to ask the user for each '
+            'season number before guessing, unless the folder matches the '
+            'format "Season XX"'))
 parser.add_argument('--ignore', '-x',
         action='append',
-        help='ignores any folder whose name is contained within this string or \
-                list of strings (separated by a space). Accepts folder names, \
-                not a full path. Example: voca.py -x miniseries webisodes \
-                "/TV/Battlestar Galactica"')
+        help=(
+            'ignores any folder whose name is contained within this string or '
+            'list of strings (separated by a space). Accepts folder names, '
+            'not a full path. Example: voca.py -x miniseries webisodes '
+            '"/TV/Battlestar Galactica"'))
 parser.add_argument('--jumbled','-j',
         action='store_true',
         help='if files are not in alphabetical order, tries to sort by number')
@@ -75,28 +79,33 @@ parser.add_argument('--preview', '-p',
         help='preview rename before executing')
 parser.add_argument('--manual','-m',
         action='store_true',
-        help='force the program to give the user the top three (if available) \
-                choices of series before choosing one')
+        help=(
+            'force the program to give the user the top three (if available) '
+            'choices of series before choosing one'))
 parser.add_argument('--verbose','-v',
         action='store_true',
         help='print all files and new names, rather than just changes')
 parser.add_argument('--disable_backup','-b',
         action='store_true',
-        help='By default, the program saves logs of old filenames from each \
-                folder in the backup directory. Enabling this option \
-                makes it impossible to later use the --undo (z) option. \
-                Note: not yet implemented.')
+        help=(
+            'By default, the program saves logs of old filenames from each '
+            'folder in the backup directory. Enabling this option '
+            'makes it impossible to later use the --undo (z) option. '
+            '\nNote: not yet implemented.'))
 parser.add_argument('dir',
         nargs='?',
         default=os.getcwd(),
-        help='the directory in which the files to be renamed are located. \
-                Default is current directory.')
+        help=(
+            'The directory in which the files to be renamed are located. '
+            'Default is current directory.'))
 args = parser.parse_args()
 query = args.query
 showid = args.showid or False
-link = args.link or ('http://api.tvmaze.com/shows/'+str(showid)+'/episodes' \
+link = args.link or ('https://api.tvmaze.com/shows/'+str(showid)+'/episodes' \
         if showid else False)
 filetype = args.filetype
+SESSION = requests.Session()
+
 if filetype:
     if not filetype.startswith('.'):
         filetype = '.'+filetype
@@ -114,7 +123,7 @@ gentle = args.gentle
 preview = args.preview
 manual = args.manual
 verbose = args.verbose or preview
-logging = False if args.disable_backup else True
+enable_backup_log = not args.disable_backup
 wd = args.dir.rstrip('/')
 
 filetypes = ('.mkv','.mp4','.avi','.srt')
@@ -146,17 +155,51 @@ def get_old_names(directory):
         old_names.sort()
     return (old_names,ext)
 
+_episode_cache = {}
+
+
+def make_filesafe(name, replacement='_', max_len=240):
+    """
+    Convert an arbitrary string into a filename-safe component.
+    - Replaces common forbidden characters with replacement.
+    - Strips control characters.
+    - Collapses whitespace.
+    - Avoids trailing spaces/dots (Windows-hostile).
+    - Enforces a conservative max length (keeps room for prefix/extension).
+    """
+    if name is None:
+        name = ''
+    name = str(name)
+    # Collapse internal whitespace to single spaces
+    name = ' '.join(name.split())
+    # Common forbidden filename chars (Windows set; safe superset for most cases)
+    forbidden = '\\/:*?"<>|'
+    out = []
+    for ch in name:
+        # Drop NUL and other control characters
+        if ch == '\0' or ord(ch) < 32:
+            continue
+        out.append(replacement if ch in forbidden else ch)
+
+    name = ''.join(out).strip(' .')
+    if not name:
+        name = 'Untitled'
+    if len(name) > max_len:
+        name = name[:max_len].rstrip(' .')
+    return name
+
+
+def get_episodes(showid):
+    if showid not in _episode_cache:
+        _episode_cache[showid] = scrape_page(f"https://api.tvmaze.com/shows/{showid}/episodes")
+    return _episode_cache[showid]
+
 
 def get_titles(showid,season):
-    link = 'http://api.tvmaze.com/shows/'+str(showid)+'/episodes'
-    data = scrape_page(link)
     titles = []
-    for episode in data:
+    for ep in get_episodes(showid):
         if episode['season'] == season:
-            title = episode['name']
-            filesafe = ''.join([c if c not in "\/:*?<>|" else '_' \
-                    for c in title])
-            titles.append(filesafe)
+            titles.append(make_filesafe(ep.get("name") or ""))
     return(titles)
 
 
@@ -166,9 +209,9 @@ def get_filenames(titles,filetype):
         appendeelist = appendees.split(',')
         for appendee in appendeelist:
             appendee = int(appendee)
-            titles[appendee-1] = titles[appendee-1]+appender
+            titles[appendee-1] = make_filesafe(titles[appendee-1]+appender)
     for i in range(len(titles)):
-        filename = '%02d %s%s'%(i+1,titles[i],filetype)
+        filename = '%02d %s%s'%(i+1,make_filesafe(titles[i]),filetype)
         filenames.append(filename)
     return(filenames)
 
@@ -193,6 +236,13 @@ def seasonprompt(folder, missingseasons):
             pass
     return season
 
+def safe_rename(src, dst):
+    # Refuse to overwrite an existing destination
+    if os.path.exists(dst):
+            print('\033[31m\033[1mError: refusing to overwrite existing file:\033[0m %s' % dst)
+            return False
+    os.rename(src, dst)
+    return True
 
 def rename(old_names,filenames,subs_present,old_subnames,subnames):
     if len(old_names) == len(filenames):
@@ -212,7 +262,8 @@ def rename(old_names,filenames,subs_present,old_subnames,subnames):
                         %(old_names[i],filenames[i]))
                 if preview: continue
                 else:
-                    os.rename(old_names[i],filenames[i])
+                    if not safe_rename(old_names[i],filenames[i]):
+                        return 3
         if subs_present:
             os.chdir('subs')
             print('\033[m/subs')
@@ -224,7 +275,8 @@ def rename(old_names,filenames,subs_present,old_subnames,subnames):
                             %(old_subnames[i],subnames[i]))
                     if preview: continue
                     else:
-                        os.rename(old_names[i],subnames[i])
+                        if not os.rename(old_subnames[i],subnames[i]):
+                            return 3
             subs_present = False
             os.chdir('..')
         return False
@@ -247,42 +299,41 @@ def weed_files(files,filetype):
                 if f.endswith(ext):
                     files,ext = weed_files(files,ext)
                     return (files,ext)
-            return False,False
+            return [], None
     return (files,filetype)
 
 
-def weed_folders(directory):
-    for d in directory[:]:
-        if 'extras' in d.lower() or 'subs' in d.lower():
-            directory.remove(d)
-        if ignore:
-            if len(ignore)>1:
-                for x in ignore:
-                    if x in d.lower():
-                        directory.remove(d)
-            else:
-                if ignore in d.lower():
-                    directory.remove(d)
-    directory.sort()
-    return directory
+def weed_folders(folders):
+    out = []
+    for d in folders:
+        dl = d.lower()
+        if 'extras' in dl or 'subs' in dl:
+            contune
+        out.append(d)
+    out.sort()
+    return out
 
 
-def scrape_page(link):
-    retry = 3
-    try:
-        html = requests.get(link)
-        data = json.loads(html.content)
-    except requests.exceptions.Timeout or requests.exceptions.ConnectionError:
-        while retry > 0 and not series:
-            print('Timed out, retrying')
-            html = requests.get(link)
-            data = json.loads(html.content)
-            retry -=1
-    except requests.exceptions.RequestException as e:
-        print('Network error. Make sure you are online and try again.')
-        print(e)
-        sys.exit()
-    return data
+def scrape_page(link, params=None):
+    retries = 3
+    for attempt in range(retries):
+        try:
+            r = SESSION.get(link, params=params, timeout=10)
+            r.raise_for_status()
+            return r.json()
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            if attempt < retries - 1:
+                print('Timed out, retrying')
+                continue
+            print('Timed out. Make sure you are online and try again.')
+            sys.exit(1)
+        except ValueError as e:
+            print('Error: API did not return valid JSON.')
+            sys.exit(1)
+        except requests.exceptions.RequestException as e:
+            print('Network/HTTP error. Make sure you are online and try again.')
+            print(e)
+            sys.exit(1)
 
 
 def get_showID(directory):
@@ -296,8 +347,7 @@ def get_showID(directory):
         else:
             searchterm = os.path.split(directory)[1]
         print('Search term: %s'%searchterm)
-        searchlink = 'http://api.tvmaze.com/search/shows?q=:'+searchterm
-        results = scrape_page(searchlink)
+        results = scrape_page("https://api.tvmaze.com/search/shows", params={"q":searchterm})
         if bool(results) == False:
             print('\033[31m\033[1mNo search results for term: "%s"!'\
                     %searchterm)
@@ -310,7 +360,7 @@ def get_showID(directory):
             choices.append(get_show_data(series['show']['id']))
         if not manual and not query and len(choices) == 1:
             choice = choices[0]
-        elif not manual and not query and scores[0]-scores[1] > 10:
+        elif not manual and not query and scores[0]-0.1 > 10:
             choice = choices[0]
         else:
             for n in range(len(choices)):
@@ -343,7 +393,7 @@ def get_showID(directory):
 
 
 def get_show_data(showid):
-    link = 'http://api.tvmaze.com/shows/'+str(showid)
+    link = 'https://api.tvmaze.com/shows/'+str(showid)
     #print(link)
     series = scrape_page(link)
     data = {'series':series['name'],\
@@ -390,7 +440,7 @@ def print_show_data(series,score):
 
 
 def get_seasons(showid):
-    link = 'http://api.tvmaze.com/shows/'+str(showid)+'/seasons'
+    link = 'https://api.tvmaze.com/shows/'+str(showid)+'/seasons'
     seasondata = scrape_page(link)
     totalseasons = list(range(len(seasondata)))
     totalseasons = [i+1 for i in totalseasons]
@@ -496,7 +546,7 @@ def process_directories(root):
 
 def execute(sd,showid,season):
     old_names,ext = get_old_names(sd)
-    if len(old_names) == 0:
+    if not old_names or not ext:
         print('No valid files found in this directory! Skipping season.')
         return None
     titles = get_titles(showid,season)
@@ -505,13 +555,16 @@ def execute(sd,showid,season):
     old_subnames = []
     subnames = []
     if os.path.exists(sd+'/subs/'):
-        subs_present = True
         old_subnames,subext = get_old_names(sd+'/subs/')
-        subnames = get_filenames(titles,subext)
+        if old_subnames and subext:
+            subs_present = True
+            subnames = get_filenames(titles, subext)
+        else:
+            subs_present = False
     os.chdir(sd)
     failure = rename(old_names,filenames,subs_present,old_subnames,subnames)
     os.chdir('..')
-    if not failure:
+    if not failure and enable_backup_log:
         log(old_names,filenames)
     else:
         show = get_show_data(showid)
@@ -524,6 +577,11 @@ def execute(sd,showid,season):
                     'missing data or is the wrong series/season selected? '\
                     '\nOperation canceled. Series:\033[0m')
             print_show_data(show,None)
+        elif failure == 3:
+            print('\033[31m\033[lm\nError: Rename would overwrite an existing file.'
+            '\nOperation canceled for safety.\033[0m')
+            print_show_data(show, None)
+            return None
         print('\033[1m\nSeason %02d'%season)
         print('Title - File:\033[0m')
         for title,name in itertools.zip_longest(titles,old_names):
