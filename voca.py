@@ -3,7 +3,7 @@
 """Properly name files of TV episodes using the TVmaze API."""
 __author__ = "Chas Kissick"
 __license__ = "GNU General Public License v3.0"
-__version__ = "0.11"
+__version__ = "2026.04.29.4"
 
 import os
 import sys
@@ -15,13 +15,8 @@ import itertools
 import logging
 
 ### TODO:
-# add I ignore option that ignores missing episodes (e.g. \
-#        if two episodes are combined into one file)
-# add log feature
-# add "reverse" option
-# add try import html2text?
-# flesh out "verbose" function, possibly with custom printing function that takes text and priority
-# allow for multiple filetypes in the same folder, as long as they are video filetypes
+# 1. add ignore option for missing episodes (e.g. if two episodes are combined into one file)
+# 2. flesh out verbose function, possibly with custom printing function that takes text and priority
 
 # Parse arguments
 parser = argparse.ArgumentParser(description=('Properly name files of TV episodes.'))
@@ -85,7 +80,7 @@ parser.add_argument('--manual','-m',
 parser.add_argument('--verbose','-v',
         action='store_true',
         help='print all files and new names, rather than just changes')
-parser.add_argument('--disable_backup','-b',
+parser.add_argument('--quiet','-Q',
         action='store_true',
         help=(
             'By default, the program saves logs of old filenames from each '
@@ -125,7 +120,7 @@ gentle = args.gentle
 preview = args.preview
 manual = args.manual
 verbose = args.verbose or preview
-enable_backup_log = not args.disable_backup
+enable_backup_log = not args.quiet
 undo_mode = args.undo
 wd = args.dir.rstrip('/')
 
