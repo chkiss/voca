@@ -3,7 +3,7 @@
 """Properly name files of TV episodes using the TVmaze API."""
 __author__ = "Chas Kissick"
 __license__ = "GNU General Public License v3.0"
-__version__ = "2026.04.29.6"
+__version__ = "2026.04.29.7"
 
 import os
 import sys
@@ -15,7 +15,12 @@ import itertools
 import logging
 
 ### TODO:
-# (all items complete)
+# TODO #3: handle 429 rate-limit responses from TVmaze with backoff retry
+# TODO #4: support season 0 (specials) — currently season=0 is falsy
+# TODO #5: strip year/resolution/season suffixes from directory name before searching
+# TODO #6: after -p preview, prompt "Execute? [y/N]" instead of requiring a second run
+# TODO #7: -j fallback — if numeric sort fails, fall back to alphabetical sort
+# TODO #8: quiet mode + get_showID() manual selection — show choices even with -q
 
 # Parse arguments
 parser = argparse.ArgumentParser(description=('Properly name files of TV episodes.'))
@@ -256,9 +261,9 @@ def get_filenames(titles, filetype, old_names=None):
 
 
 def seasonprompt(folder, missingseasons):
-    vprint('What season is contained in this folder?: %s'%folder)
+    print('What season is contained in this folder?: %s'%folder)
     while True:
-        vprint('Possible seasons: %s' % missingseasons)
+        print('Possible seasons: %s' % missingseasons)
         season = input('Enter an integer from the above selection '\
                 'or type Q to ignore this directory: ')
         try:
@@ -271,7 +276,7 @@ def seasonprompt(folder, missingseasons):
         if season in missingseasons:
             break
         else:
-            vprint('That choice is not valid!')
+            print('That choice is not valid!')
             pass
     return season
 
