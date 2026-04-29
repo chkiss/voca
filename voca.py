@@ -311,9 +311,12 @@ def weed_files(files, filetype):
         kept = [f for f in files if f.endswith(filetype)]
         for f in files:
             if not f.endswith(filetype):
-                print('Ignoring %s - wrong filetype' % f)
+                print('Ignoring %s - not a supported video file' % f)
         return (kept, filetype)
     kept = [f for f in files if f.endswith(filetypes)]
+    for f in files:
+        if not f.endswith(filetypes):
+            print('Ignoring %s - not a supported video file' % f)
     if not kept:
         return [], None
     exts = {os.path.splitext(f)[1] for f in kept}
