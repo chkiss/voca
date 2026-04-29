@@ -3,7 +3,7 @@
 """Properly name files of TV episodes using the TVmaze API."""
 __author__ = "Chas Kissick"
 __license__ = "GNU General Public License v3.0"
-__version__ = "2026.04.29.4"
+__version__ = "2026.04.29.6"
 
 import os
 import sys
@@ -15,12 +15,11 @@ import itertools
 import logging
 
 ### TODO:
-# 1. add ignore option for missing episodes (e.g. if two episodes are combined into one file)
-# 2. flesh out verbose function, possibly with custom printing function that takes text and priority
+# (all items complete)
 
 # Parse arguments
 parser = argparse.ArgumentParser(description=('Properly name files of TV episodes.'))
-parser.add_argument('--query','-q',
+parser.add_argument('--query','-Q',
         action='store_true',
         help=('Queries the database for show info if a number is input, otherwise queries the database with the search term.'))
 parser.add_argument('--showid','-i',
@@ -78,9 +77,15 @@ parser.add_argument('--manual','-m',
             'force the program to give the user the top three (if available) '
             'choices of series before choosing one'))
 parser.add_argument('--verbose','-v',
+        action='count',
+        default=0,
+        help='-v: verbose output (ignored files, search terms); -vv: debug (directory progress, API calls)')
+parser.add_argument('--skip','-e',
+        help='episode numbers to skip from the API listing, comma-separated (e.g. -e 6 or -e 5,6)')
+parser.add_argument('--quiet','-q',
         action='store_true',
-        help='print all files and new names, rather than just changes')
-parser.add_argument('--quiet','-Q',
+        help='suppress all output except errors')
+parser.add_argument('--no-log',
         action='store_true',
         help=(
             'By default, the program saves logs of old filenames from each '
@@ -115,18 +120,26 @@ else:
     appendees = []
 sprompt = False if args.assume_season else True
 ignore = args.ignore or []
+skip_episodes = set(int(x) for x in args.skip.split(',')) if args.skip else set()
 jumbled = args.jumbled
 gentle = args.gentle
 preview = args.preview
 manual = args.manual
-verbose = args.verbose or preview
-enable_backup_log = not args.quiet
+verbosity = args.verbose
+quiet_mode = args.quiet
+enable_backup_log = not args.no_log
 undo_mode = args.undo
 wd = args.dir.rstrip('/')
 
 filetypes = ('.mkv','.mp4','.avi','.srt')
 LOG_DIR = os.path.expanduser('~/.local/share/voca')
 LOG_FILE = os.path.join(LOG_DIR, 'latest.json')
+
+def vprint(text, priority=1):
+    """Priority: 0=always (errors), 1=normal, 2=verbose (-v), 3=debug (-vv)."""
+    if priority == 0 or (not quiet_mode and priority <= verbosity + 1):
+        print(text)
+
 
 def log(directory, old_names, filenames):
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -145,21 +158,21 @@ def undo(directory):
         with open(LOG_FILE, 'r') as f:
             data = json.load(f)
     except FileNotFoundError:
-        print('No log found. Cannot undo.')
+        vprint('No log found. Cannot undo.', 0)
         sys.exit(1)
     except ValueError:
-        print('Log file is corrupted.')
+        vprint('Log file is corrupted.', 0)
         sys.exit(1)
     if directory not in data:
-        print('No log entry for: %s' % directory)
+        vprint('No log entry for: %s' % directory, 0)
         sys.exit(1)
     os.chdir(directory)
     for old, new in data[directory].items():
         if os.path.exists(new):
             if safe_rename(new, old):
-                print('\033[37m%s >\n\033[32m%s\033[0m' % (new, old))
+                vprint('\033[37m%s >\n\033[32m%s\033[0m' % (new, old))
         else:
-            print('Warning: %s not found, skipping' % new)
+            vprint('Warning: %s not found, skipping' % new, 0)
     del data[directory]
     with open(LOG_FILE, 'w') as f:
         json.dump(data, f, indent=2)
@@ -171,8 +184,8 @@ def get_old_names(directory):
         try:
             old_names.sort(key=lambda c: int(''.join(filter(str.isdigit, c))))
         except:
-            print('\033[31m\033[1m''Error: files may not be sorted correctly. '\
-                    'Please check:\033[0m')
+            vprint('\033[31m\033[1mError: files may not be sorted correctly. '\
+                    'Please check:\033[0m', 0)
     else:
         old_names.sort()
     return (old_names,ext)
@@ -213,14 +226,17 @@ def make_filesafe(name, replacement='_', max_len=240):
 
 def get_episodes(showid):
     if showid not in _episode_cache:
+        vprint('Fetching episodes for show ID %s' % showid, 3)
         _episode_cache[showid] = scrape_page(f"https://api.tvmaze.com/shows/{showid}/episodes")
+    else:
+        vprint('Using cached episodes for show ID %s' % showid, 3)
     return _episode_cache[showid]
 
 
 def get_titles(showid,season):
     titles = []
     for ep in get_episodes(showid):
-        if ep['season'] == season:
+        if ep['season'] == season and ep['number'] not in skip_episodes:
             titles.append(make_filesafe(ep.get("name") or ""))
     return(titles)
 
@@ -240,9 +256,9 @@ def get_filenames(titles, filetype, old_names=None):
 
 
 def seasonprompt(folder, missingseasons):
-    print('What season is contained in this folder?: %s'%folder)
+    vprint('What season is contained in this folder?: %s'%folder)
     while True:
-        print('Possible seasons: ',missingseasons)
+        vprint('Possible seasons: %s' % missingseasons)
         season = input('Enter an integer from the above selection '\
                 'or type Q to ignore this directory: ')
         try:
@@ -255,14 +271,14 @@ def seasonprompt(folder, missingseasons):
         if season in missingseasons:
             break
         else:
-            print('That choice is not valid!')
+            vprint('That choice is not valid!')
             pass
     return season
 
 def safe_rename(src, dst):
     # Refuse to overwrite an existing destination
     if os.path.exists(dst):
-            print('\033[31m\033[1mError: refusing to overwrite existing file:\033[0m %s' % dst)
+            vprint('\033[31m\033[1mError: refusing to overwrite existing file:\033[0m %s' % dst, 0)
             return False
     os.rename(src, dst)
     return True
@@ -271,9 +287,9 @@ def rename(old_names,filenames,subs_present,old_subnames,subnames):
     if len(old_names) == len(filenames):
         for i in range(len(old_names)):
             if old_names[i] == filenames[i]:
-                print(old_names[i]+'- unchanged')
+                vprint(old_names[i]+'- unchanged')
             else:
-                print('\033[37m%s >\n\033[32m%s\033[0m'\
+                vprint('\033[37m%s >\n\033[32m%s\033[0m'\
                         %(old_names[i],filenames[i]))
                 if preview: continue
                 else:
@@ -281,12 +297,12 @@ def rename(old_names,filenames,subs_present,old_subnames,subnames):
                         return 3
         if subs_present:
             os.chdir('subs')
-            print('\033[m/subs')
+            vprint('\033[m/subs')
             for i in range(len(old_names)):
                 if old_subnames[i] == subnames[i]:
-                        print(old_subnames[i]+'- unchanged')
+                        vprint(old_subnames[i]+'- unchanged')
                 else:
-                    print('\033[37m%s >\n\033[32m%s\033[0m'\
+                    vprint('\033[37m%s >\n\033[32m%s\033[0m'\
                             %(old_subnames[i],subnames[i]))
                     if preview: continue
                     else:
@@ -306,12 +322,12 @@ def weed_files(files, filetype):
         kept = [f for f in files if f.endswith(filetype)]
         for f in files:
             if not f.endswith(filetype):
-                print('Ignoring %s - not a supported video file' % f)
+                vprint('Ignoring %s - not a supported video file' % f, 2)
         return (kept, filetype)
     kept = [f for f in files if f.endswith(filetypes)]
     for f in files:
         if not f.endswith(filetypes):
-            print('Ignoring %s - not a supported video file' % f)
+            vprint('Ignoring %s - not a supported video file' % f, 2)
     if not kept:
         return [], None
     exts = {os.path.splitext(f)[1] for f in kept}
@@ -330,6 +346,7 @@ def weed_folders(folders):
 
 
 def scrape_page(link, params=None):
+    vprint('API call: %s%s' % (link, ' %s' % params if params else ''), 3)
     retries = 3
     for attempt in range(retries):
         try:
@@ -338,16 +355,16 @@ def scrape_page(link, params=None):
             return r.json()
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
             if attempt < retries - 1:
-                print('Timed out, retrying')
+                vprint('Timed out, retrying', 2)
                 continue
-            print('Timed out. Make sure you are online and try again.')
+            vprint('Timed out. Make sure you are online and try again.', 0)
             sys.exit(1)
         except ValueError as e:
-            print('Error: API did not return valid JSON.')
+            vprint('Error: API did not return valid JSON.', 0)
             sys.exit(1)
         except requests.exceptions.RequestException as e:
-            print('Network/HTTP error. Make sure you are online and try again.')
-            print(e)
+            vprint('Network/HTTP error. Make sure you are online and try again.', 0)
+            vprint(str(e), 0)
             sys.exit(1)
 
 
@@ -361,11 +378,11 @@ def get_showID(directory):
             searchterm = name
         else:
             searchterm = os.path.split(directory)[1]
-        print('Search term: %s'%searchterm)
+        vprint('Search term: %s'%searchterm, 2)
         results = scrape_page("https://api.tvmaze.com/search/shows", params={"q":searchterm})
         if bool(results) == False:
-            print('\033[31m\033[1mNo search results for term: "%s"!'\
-                    %searchterm)
+            vprint('\033[31m\033[1mNo search results for term: "%s"!'\
+                    %searchterm, 0)
             sys.exit()
         # Grab the score of the first three results and compare them
         choices = []
@@ -382,13 +399,13 @@ def get_showID(directory):
                 if query:
                     pass
                 else:
-                    print('\n\033[1mChoice %d:'%(n+1))
+                    vprint('\n\033[1mChoice %d:'%(n+1))
                 print_show_data(choices[n],scores[n])
-                print('-------------------------------------------------------')
+                vprint('-------------------------------------------------------')
             if query:
                 return
             if len(choices) < 3:
-                print('No other choices.')
+                vprint('No other choices.', 2)
             while True:
                 selection = input('Please select 1, 2 or 3, or Q to cancel: ')
                 try:
@@ -396,12 +413,12 @@ def get_showID(directory):
                     break
                 except ValueError:
                     if selection in ('Q','q','N','n'):
-                        print('Quitting.')
+                        vprint('Quitting.')
                         raise SystemExit
                     else:
-                        print('That choice is not valid!')
+                        vprint('That choice is not valid!')
                 except IndexError:
-                    print('That choice is not valid!')
+                    vprint('That choice is not valid!')
                     pass
         showid = choice['id']
     return showid
@@ -441,7 +458,7 @@ def get_show_data(showid):
 
 
 def print_show_data(series,score):
-    print('\033[1m%s\033[0m (id: %s)\
+    vprint('\033[1m%s\033[0m (id: %s)\
             \n%s\n%s\nPremiere: %s\n%s - %s\
             \n\033[1mSummary: \033[0m%s'
             %(series['series'],series['id'],\
@@ -451,7 +468,7 @@ def print_show_data(series,score):
             series['country'],series['network'],\
             series['summary']))
     if score:
-        print('Match:%d'%score)
+        vprint('Match:%d'%score)
 
 
 def get_seasons(showid):
@@ -489,13 +506,13 @@ def process_directories(root):
             if fil.endswith(filetype or filetypes):
                 validfiles = 1
                 break
-        print(path)
+        vprint(path, 3)
         levels += 1
 # If it contains episodes, process them
     if levels == 0:
         parent = os.path.split(path)[1]
         if parent in ignore:
-            print('Ignoring %s'%parent)
+            vprint('Ignoring %s'%parent)
             exit()
         if not showid:
             foundshowid = get_showID(parent)
@@ -508,7 +525,7 @@ def process_directories(root):
                     foundseason = missingseasons[0]
                 else:
                     foundseason = seasonprompt(parent,missingseasons)
-        print('\033[1m%s\033[0m'%parent)
+        vprint('\033[1m%s\033[0m'%parent)
         execute(path,showid or foundshowid,season or foundseason)
 # If it contains seasons, rename the folders and go through each
     elif levels == 1:
@@ -524,9 +541,9 @@ def process_directories(root):
                 foundseason = int(folder[-2:])
                 missingseasons.remove(foundseason)
         for folder in folders:
-            print('\033[1m%s\033[0m'%folder)
+            vprint('\033[1m%s\033[0m'%folder)
             if folder in ignore:
-                print('Ignoring %s'%folder)
+                vprint('Ignoring %s'%folder)
                 continue
             if folder.lower().startswith('season'):
                 foundseason = int(folder[-2:])
@@ -541,7 +558,7 @@ def process_directories(root):
                 if sprompt:
                     foundseason = int(seasonprompt(folder, missingseasons))
                 if not foundseason:
-                    print('Ignoring %s'%folder)
+                    vprint('Ignoring %s'%folder)
                     continue
                 else:
                     missingseasons.remove(foundseason)
@@ -562,7 +579,7 @@ def process_directories(root):
 def execute(sd,showid,season):
     old_names,ext = get_old_names(sd)
     if not old_names:
-        print('No valid files found in this directory! Skipping season.')
+        vprint('No valid files found in this directory! Skipping season.', 0)
         return None
     titles = get_titles(showid,season)
     filenames = get_filenames(titles, ext, old_names)
@@ -584,28 +601,28 @@ def execute(sd,showid,season):
     else:
         show = get_show_data(showid)
         if failure == 1:
-            print('\033[31m\033[1m\nError: More files than episodes! Please '\
-                    'verify that the correct series/season is:\033[0m')
+            vprint('\033[31m\033[1m\nError: More files than episodes! Please '\
+                    'verify that the correct series/season is:\033[0m', 0)
             print_show_data(show,None)
         elif failure == 2:
-            print('\033[31m\033[1m\nError: Fewer files than episodes! Are you '\
+            vprint('\033[31m\033[1m\nError: Fewer files than episodes! Are you '\
                     'missing data or is the wrong series/season selected? '\
-                    '\nOperation canceled. Series:\033[0m')
+                    '\nOperation canceled. Series:\033[0m', 0)
             print_show_data(show,None)
         elif failure == 3:
-            print('\033[31m\033[lm\nError: Rename would overwrite an existing file.'
-            '\nOperation canceled for safety.\033[0m')
+            vprint('\033[31m\033[lm\nError: Rename would overwrite an existing file.'
+            '\nOperation canceled for safety.\033[0m', 0)
             print_show_data(show, None)
             return None
-        print('\033[1m\nSeason %02d'%season)
-        print('Title - File:\033[0m')
+        vprint('\033[1m\nSeason %02d'%season, 0)
+        vprint('Title - File:\033[0m', 0)
         for title,name in itertools.zip_longest(titles,old_names):
-            print(title,' - ',name)
-        print()
+            vprint('%s  -  %s' % (title, name), 0)
+        vprint('', 0)
 
 if undo_mode:
     undo(wd)
-    print('\033[0mUndo Complete.')
+    vprint('\033[0mUndo Complete.')
 elif query:
     try:
         wd = int(wd)
@@ -616,6 +633,6 @@ elif query:
 else:
     process_directories(wd)
     if preview:
-        print('\033[0mSimulation Complete.')
+        vprint('\033[0mSimulation Complete.')
     else:
-        print('\033[0mOperation Complete.')
+        vprint('\033[0mOperation Complete.')

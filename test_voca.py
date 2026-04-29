@@ -41,6 +41,7 @@ def reset_globals():
     """Restore mutated module-level globals after every test."""
     saved = {k: getattr(voca, k) for k in (
         'appendees', 'jumbled', 'preview', 'filetype', 'enable_backup_log',
+        'skip_episodes', 'verbosity', 'quiet_mode',
     )}
     had_appender = hasattr(voca, 'appender')
     saved_appender = getattr(voca, 'appender', None)
@@ -69,6 +70,40 @@ def restore_cwd():
     orig = os.getcwd()
     yield
     os.chdir(orig)
+
+
+# ── vprint ────────────────────────────────────────────────────────────────────
+
+class TestVprint:
+    def test_priority0_always_prints(self, capsys):
+        voca.quiet_mode = True
+        voca.verbosity = 0
+        voca.vprint('error', 0)
+        assert 'error' in capsys.readouterr().out
+
+    def test_priority1_suppressed_in_quiet_mode(self, capsys):
+        voca.quiet_mode = True
+        voca.verbosity = 0
+        voca.vprint('normal', 1)
+        assert capsys.readouterr().out == ''
+
+    def test_priority2_requires_verbose(self, capsys):
+        voca.quiet_mode = False
+        voca.verbosity = 0
+        voca.vprint('verbose', 2)
+        assert capsys.readouterr().out == ''
+        voca.verbosity = 1
+        voca.vprint('verbose', 2)
+        assert 'verbose' in capsys.readouterr().out
+
+    def test_priority3_requires_double_verbose(self, capsys):
+        voca.quiet_mode = False
+        voca.verbosity = 1
+        voca.vprint('debug', 3)
+        assert capsys.readouterr().out == ''
+        voca.verbosity = 2
+        voca.vprint('debug', 3)
+        assert 'debug' in capsys.readouterr().out
 
 
 # ── make_filesafe ─────────────────────────────────────────────────────────────
@@ -129,6 +164,7 @@ class TestWeedFiles:
         assert ext == '.mkv'
 
     def test_specific_ext_filters_non_matching(self, capsys):
+        voca.verbosity = 1  # -v required to see ignored-file messages (priority 2)
         result, ext = voca.weed_files(['a.mkv', 'b.mp4', 'c.mkv'], '.mkv')
         assert set(result) == {'a.mkv', 'c.mkv'}
         assert 'b.mp4' in capsys.readouterr().out
@@ -519,6 +555,27 @@ class TestGetTitles:
             result = voca.get_titles(1, 1)
         assert '/' not in result[0]
         assert ':' not in result[0]
+
+    def test_skip_single_episode(self):
+        voca.skip_episodes = {2}
+        with patch.object(voca, 'get_episodes', return_value=self._EPS):
+            assert voca.get_titles(1, 1) == ['Pilot']
+
+    def test_skip_multiple_episodes(self):
+        voca.skip_episodes = {1, 2}
+        with patch.object(voca, 'get_episodes', return_value=self._EPS):
+            assert voca.get_titles(1, 1) == []
+
+    def test_skip_episode_not_in_season_has_no_effect(self):
+        voca.skip_episodes = {99}
+        with patch.object(voca, 'get_episodes', return_value=self._EPS):
+            assert voca.get_titles(1, 1) == ['Pilot', 'Second']
+
+    def test_skip_only_affects_target_season(self):
+        voca.skip_episodes = {1}
+        with patch.object(voca, 'get_episodes', return_value=self._EPS):
+            # ep number 1 in season 2 should also be skipped
+            assert voca.get_titles(1, 2) == []
 
 
 # ── get_show_data HTML stripping ──────────────────────────────────────────────

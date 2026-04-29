@@ -25,17 +25,20 @@ voca.py [options] [dir]
 | `-n NAME` | Exact show name to search (e.g. `"The Office"`) |
 | `-s N` | Season number |
 | `-f EXT` | Only process files with this extension |
-| `-q [TERM]` | Query TVmaze: show info if given an ID, search results if given a name |
+| `-Q [TERM]` | Query TVmaze: show info if given an ID, search results if given a name |
 | `-m` | Manually select from top 3 search results |
 | `-S` | Assume season folders are in series order without prompting |
 | `-x FOLDER` | Ignore a folder by name (repeatable) |
 | `-j` | Sort files numerically instead of alphabetically |
 | `-g` | Gentle mode: don't rename any folders |
 | `-p` | Preview renames without executing |
+| `-e EPISODES` | Skip episode numbers from the API listing, comma-separated (e.g. `-e 6` or `-e 5,6`). Use when two episodes are combined into one file. |
 | `-a SUFFIX EPISODES` | Append a suffix to specific episode filenames, e.g. `-a " (Extended)" 12,18,19` |
-| `-Q` | Quiet mode: disable backup log |
+| `-q` | Quiet mode: suppress all output except errors |
+| `--no-log` | Disable backup log (prevents use of `-z`) |
 | `-z` | Undo the most recent rename for the given directory |
-| `-v` | Verbose output |
+| `-v` | Verbose: also show ignored files and search terms |
+| `-vv` | Debug: also show directory traversal and API calls |
 
 ## Examples
 
@@ -50,7 +53,7 @@ voca.py -i 169 -s 2 "/TV/Breaking Bad/Season 02"
 voca.py "/TV/The Wire"
 
 # Look up a show on TVmaze
-voca.py -q "The Sopranos"
+voca.py -Q "The Sopranos"
 
 # Undo the last rename
 voca.py -z "/TV/Breaking Bad/Season 02"
@@ -64,4 +67,4 @@ Files of other types in the same directory are skipped and reported.
 
 ## Backup and undo
 
-Unless `-Q` is set, every rename is logged to `~/.local/share/voca/latest.json`. Use `-z` to reverse the most recent rename for a directory.
+Unless `--no-log` is set, every rename is logged to `~/.local/share/voca/latest.json`. Use `-z` to reverse the most recent rename for a directory.
