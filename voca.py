@@ -90,8 +90,10 @@ parser.add_argument('--disable_backup','-b',
         help=(
             'By default, the program saves logs of old filenames from each '
             'folder in the backup directory. Enabling this option '
-            'makes it impossible to later use the --undo (z) option. '
-            '\nNote: not yet implemented.'))
+            'makes it impossible to later use the --undo (z) option.'))
+parser.add_argument('--undo','-z',
+        action='store_true',
+        help='undo the most recent rename operation for the given directory')
 parser.add_argument('dir',
         nargs='?',
         default=os.getcwd(),
@@ -124,23 +126,48 @@ preview = args.preview
 manual = args.manual
 verbose = args.verbose or preview
 enable_backup_log = not args.disable_backup
+undo_mode = args.undo
 wd = args.dir.rstrip('/')
 
 filetypes = ('.mkv','.mp4','.avi','.srt')
+LOG_DIR = os.path.expanduser('~/.local/share/voca')
+LOG_FILE = os.path.join(LOG_DIR, 'latest.json')
 
-def log(old_names,filenames):
-    entry = dict(zip(old_names,filenames))
-    #if not os.path.exists('/var/log/Voca/'):
-    #    os.mkdir('/var/log/Voca/')
-    #latest = open('/var/log/Voca/latest.txt', 'w+')
-    #json.dump(entry,latest)
-    #latest.close()
-    #log = open('/var/log/Voca/log.txt', 'a')
-    #latest = open('/var/log/Voca/latest.txt', 'r')
-    #log.write(latest.read())
-    #log.close()
-    #logging.basicConfig(filename='voca.log',level=logging.INFO)
-    #logging.info(entry)
+def log(directory, old_names, filenames):
+    os.makedirs(LOG_DIR, exist_ok=True)
+    try:
+        with open(LOG_FILE, 'r') as f:
+            data = json.load(f)
+    except (FileNotFoundError, ValueError):
+        data = {}
+    data[directory] = dict(zip(old_names, filenames))
+    with open(LOG_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
+
+def undo(directory):
+    try:
+        with open(LOG_FILE, 'r') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print('No log found. Cannot undo.')
+        sys.exit(1)
+    except ValueError:
+        print('Log file is corrupted.')
+        sys.exit(1)
+    if directory not in data:
+        print('No log entry for: %s' % directory)
+        sys.exit(1)
+    os.chdir(directory)
+    for old, new in data[directory].items():
+        if os.path.exists(new):
+            if safe_rename(new, old):
+                print('\033[37m%s >\n\033[32m%s\033[0m' % (new, old))
+        else:
+            print('Warning: %s not found, skipping' % new)
+    del data[directory]
+    with open(LOG_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
 
 def get_old_names(directory):
     (_, _,old_names) = next(os.walk(directory))
@@ -203,7 +230,7 @@ def get_titles(showid,season):
     return(titles)
 
 
-def get_filenames(titles,filetype):
+def get_filenames(titles, filetype, old_names=None):
     filenames = []
     if appendees:
         appendeelist = appendees.split(',')
@@ -211,9 +238,10 @@ def get_filenames(titles,filetype):
             appendee = int(appendee)
             titles[appendee-1] = make_filesafe(titles[appendee-1]+appender)
     for i in range(len(titles)):
-        filename = '%02d %s%s'%(i+1,make_filesafe(titles[i]),filetype)
+        ext = filetype if filetype else os.path.splitext(old_names[i])[1]
+        filename = '%02d %s%s' % (i+1, make_filesafe(titles[i]), ext)
         filenames.append(filename)
-    return(filenames)
+    return filenames
 
 
 def seasonprompt(folder, missingseasons):
@@ -246,14 +274,6 @@ def safe_rename(src, dst):
 
 def rename(old_names,filenames,subs_present,old_subnames,subnames):
     if len(old_names) == len(filenames):
-#        if reverse:
-#            for i in range(0, len(old_names)):
-#                os.rename('%s%s%s'%(j,titles[i],filetype), old_names[i])
-#                print('%s%s%s'%(j,titles[i],filetype), "=>", old_names[i])
-#                if i == len(old_names):
-#                    print("Names reverted.")
-#                i += 1
-#        else:
         for i in range(len(old_names)):
             if old_names[i] == filenames[i]:
                 print(old_names[i]+'- unchanged')
@@ -286,21 +306,18 @@ def rename(old_names,filenames,subs_present,old_subnames,subnames):
         return 2
 
 
-def weed_files(files,filetype):
-    for f in files[:]:
-        if filetype:
-            if f.endswith(filetype):
-                pass
-            else:
-                files.remove(f)
-                print('Ignoring %s - wrong filetype'%(f))
-        else:
-            for ext in filetypes:
-                if f.endswith(ext):
-                    files,ext = weed_files(files,ext)
-                    return (files,ext)
-            return [], None
-    return (files,filetype)
+def weed_files(files, filetype):
+    if filetype:
+        kept = [f for f in files if f.endswith(filetype)]
+        for f in files:
+            if not f.endswith(filetype):
+                print('Ignoring %s - wrong filetype' % f)
+        return (kept, filetype)
+    kept = [f for f in files if f.endswith(filetypes)]
+    if not kept:
+        return [], None
+    exts = {os.path.splitext(f)[1] for f in kept}
+    return (kept, exts.pop() if len(exts) == 1 else None)
 
 
 def weed_folders(folders):
@@ -546,11 +563,11 @@ def process_directories(root):
 
 def execute(sd,showid,season):
     old_names,ext = get_old_names(sd)
-    if not old_names or not ext:
+    if not old_names:
         print('No valid files found in this directory! Skipping season.')
         return None
     titles = get_titles(showid,season)
-    filenames = get_filenames(titles,ext)
+    filenames = get_filenames(titles, ext, old_names)
     subs_present = False
     old_subnames = []
     subnames = []
@@ -558,14 +575,14 @@ def execute(sd,showid,season):
         old_subnames,subext = get_old_names(sd+'/subs/')
         if old_subnames and subext:
             subs_present = True
-            subnames = get_filenames(titles, subext)
+            subnames = get_filenames(titles, subext, old_subnames)
         else:
             subs_present = False
     os.chdir(sd)
     failure = rename(old_names,filenames,subs_present,old_subnames,subnames)
     os.chdir('..')
     if not failure and enable_backup_log:
-        log(old_names,filenames)
+        log(sd, old_names, filenames)
     else:
         show = get_show_data(showid)
         if failure == 1:
@@ -588,7 +605,10 @@ def execute(sd,showid,season):
             print(title,' - ',name)
         print()
 
-if query:
+if undo_mode:
+    undo(wd)
+    print('\033[0mUndo Complete.')
+elif query:
     try:
         wd = int(wd)
         data = get_show_data(wd)
@@ -597,7 +617,7 @@ if query:
         get_showID(wd)
 else:
     process_directories(wd)
-
-if preview:
-    print('\033[0mSimulation Complete.')
-else: print('\033[0mOperation Complete.')
+    if preview:
+        print('\033[0mSimulation Complete.')
+    else:
+        print('\033[0mOperation Complete.')
