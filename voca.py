@@ -198,7 +198,7 @@ def get_episodes(showid):
 def get_titles(showid,season):
     titles = []
     for ep in get_episodes(showid):
-        if episode['season'] == season:
+        if ep['season'] == season:
             titles.append(make_filesafe(ep.get("name") or ""))
     return(titles)
 
@@ -275,7 +275,7 @@ def rename(old_names,filenames,subs_present,old_subnames,subnames):
                             %(old_subnames[i],subnames[i]))
                     if preview: continue
                     else:
-                        if not os.rename(old_subnames[i],subnames[i]):
+                        if not safe_rename(old_subnames[i],subnames[i]):
                             return 3
             subs_present = False
             os.chdir('..')
@@ -308,7 +308,7 @@ def weed_folders(folders):
     for d in folders:
         dl = d.lower()
         if 'extras' in dl or 'subs' in dl:
-            contune
+            continue
         out.append(d)
     out.sort()
     return out
@@ -360,7 +360,7 @@ def get_showID(directory):
             choices.append(get_show_data(series['show']['id']))
         if not manual and not query and len(choices) == 1:
             choice = choices[0]
-        elif not manual and not query and scores[0]-0.1 > 10:
+        elif not manual and not query and scores[0] > scores[1] + 0.1:
             choice = choices[0]
         else:
             for n in range(len(choices)):
