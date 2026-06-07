@@ -12,15 +12,18 @@ import argparse
 import requests
 import json
 import itertools
-import logging
+import re
 
 ### TODO:
 # TODO #3: handle 429 rate-limit responses from TVmaze with backoff retry
 # TODO #4: support season 0 (specials) — currently season=0 is falsy
 # TODO #5: strip year/resolution/season suffixes from directory name before searching
 # TODO #6: after -p preview, prompt "Execute? [y/N]" instead of requiring a second run
-# TODO #7: -j fallback — if numeric sort fails, fall back to alphabetical sort
+# TODO #7: remove -j flag; replace sort with natural sort (splits text/number segments)
+#           so files like 1.mkv, 2.mkv, 10.mkv always sort correctly without a flag
 # TODO #8: quiet mode + get_showID() manual selection — show choices even with -q
+# TODO #9: .vocaignore file — a file placed in a folder (or its parent) that lists
+#           subdirectory names to skip, as an alternative to repeating -x on the CLI
 
 # Parse arguments
 parser = argparse.ArgumentParser(description=('Properly name files of TV episodes.'))
@@ -117,7 +120,8 @@ if filetype:
     if not filetype.startswith('.'):
         filetype = '.'+filetype
 name = args.name if args.name else False
-season = args.season if args.season else False
+# None = not specified (so season 0 / specials remains a valid explicit choice)
+season = args.season
 if args.append:
     appender = args.append[0]
     appendees = args.append[1]
@@ -247,16 +251,17 @@ def get_titles(showid,season):
 
 
 def get_filenames(titles, filetype, old_names=None):
-    filenames = []
+    # Work on a copy so the caller's list isn't mutated (it's reused for the
+    # error summary and for a second call when subtitles are present).
+    titles = list(titles)
     if appendees:
-        appendeelist = appendees.split(',')
-        for appendee in appendeelist:
-            appendee = int(appendee)
-            titles[appendee-1] = make_filesafe(titles[appendee-1]+appender)
+        for appendee in appendees.split(','):
+            idx = int(appendee) - 1
+            titles[idx] = make_filesafe(titles[idx] + appender)
+    filenames = []
     for i in range(len(titles)):
         ext = filetype if filetype else os.path.splitext(old_names[i])[1]
-        filename = '%02d %s%s' % (i+1, make_filesafe(titles[i]), ext)
-        filenames.append(filename)
+        filenames.append('%02d %s%s' % (i+1, make_filesafe(titles[i]), ext))
     return filenames
 
 
@@ -389,42 +394,40 @@ def get_showID(directory):
             vprint('\033[31m\033[1mNo search results for term: "%s"!'\
                     %searchterm, 0)
             sys.exit()
-        # Grab the score of the first three results and compare them
-        choices = []
-        scores = []
-        for series in results[:3]:
-            scores.append(series['score'])
-            choices.append(get_show_data(series['show']['id']))
-        if not manual and not query and len(choices) == 1:
-            choice = choices[0]
-        elif not manual and not query and scores[0] > scores[1] + 0.1:
-            choice = choices[0]
-        else:
-            for n in range(len(choices)):
-                if query:
-                    pass
+        # Compare the scores of the top three results. The search response
+        # already embeds each show, so we only fetch full details (an extra
+        # API call per show) when we actually need to display the choices.
+        results = results[:3]
+        scores = [series['score'] for series in results]
+        shows = [series['show'] for series in results]
+        auto = not manual and not query and (
+                len(shows) == 1 or scores[0] > scores[1] + 0.1)
+        if auto:
+            return shows[0]['id']
+        choices = [get_show_data(show['id']) for show in shows]
+        for n in range(len(choices)):
+            if not query:
+                vprint('\n\033[1mChoice %d:'%(n+1))
+            print_show_data(choices[n],scores[n])
+            vprint('-------------------------------------------------------')
+        if query:
+            return
+        if len(choices) < 3:
+            vprint('No other choices.', 2)
+        while True:
+            selection = input('Please select 1, 2 or 3, or Q to cancel: ')
+            try:
+                choice = choices[int(selection)-1]
+                break
+            except ValueError:
+                if selection in ('Q','q','N','n'):
+                    vprint('Quitting.')
+                    raise SystemExit
                 else:
-                    vprint('\n\033[1mChoice %d:'%(n+1))
-                print_show_data(choices[n],scores[n])
-                vprint('-------------------------------------------------------')
-            if query:
-                return
-            if len(choices) < 3:
-                vprint('No other choices.', 2)
-            while True:
-                selection = input('Please select 1, 2 or 3, or Q to cancel: ')
-                try:
-                    choice = choices[int(selection)-1]
-                    break
-                except ValueError:
-                    if selection in ('Q','q','N','n'):
-                        vprint('Quitting.')
-                        raise SystemExit
-                    else:
-                        vprint('That choice is not valid!')
-                except IndexError:
                     vprint('That choice is not valid!')
-                    pass
+            except IndexError:
+                vprint('That choice is not valid!')
+                pass
         showid = choice['id']
     return showid
 
@@ -479,9 +482,17 @@ def print_show_data(series,score):
 def get_seasons(showid):
     link = 'https://api.tvmaze.com/shows/'+str(showid)+'/seasons'
     seasondata = scrape_page(link)
-    totalseasons = list(range(len(seasondata)))
-    totalseasons = [i+1 for i in totalseasons]
-    return totalseasons
+    return list(range(1, len(seasondata) + 1))
+
+
+def parse_season(folder):
+    """Extract a season number from a folder named like 'Season 1',
+    'Season 02' or 'Season 100'. Returns an int, or None if it doesn't
+    look like a season folder."""
+    if not folder.lower().startswith('season'):
+        return None
+    match = re.search(r'(\d+)', folder)
+    return int(match.group(1)) if match else None
 
 
 def process_directories(root):
@@ -496,21 +507,14 @@ def process_directories(root):
 # See how many levels of directories exist until the files, assuming 
 # shows/seasons/episodes
     levels = 0
-    validfiles = 0
-    for fil in files:
-        if fil.endswith(filetype or filetypes):
-            validfiles = 1
-            break
-    while (not files) or (not files[0].endswith(filetype or filetypes)\
-            or (not validfiles)):
+    exts = filetype or filetypes
+    validfiles = any(fil.endswith(exts) for fil in files)
+    while not validfiles:
         folders = weed_folders(folders)
         if not folders: break
         os.chdir(folders[0])
         path, folders, files = next(os.walk(os.getcwd()))
-        for fil in files:
-            if fil.endswith(filetype or filetypes):
-                validfiles = 1
-                break
+        validfiles = any(fil.endswith(exts) for fil in files)
         vprint(path, 3)
         levels += 1
 # If it contains episodes, process them
@@ -521,17 +525,20 @@ def process_directories(root):
             exit()
         if not showid:
             foundshowid = get_showID(parent)
-        if not season:
-            if parent.lower().startswith('season'):
-                foundseason = int(parent[-2:])
+        foundseason = season
+        if foundseason is None:
+            foundseason = parse_season(parent)
+        if foundseason is None:
+            missingseasons = get_seasons(showid or foundshowid)
+            if len(missingseasons) == 1:
+                foundseason = missingseasons[0]
             else:
-                missingseasons = get_seasons(showid or foundshowid)
-                if len(missingseasons) == 1:
-                    foundseason = missingseasons[0]
-                else:
-                    foundseason = seasonprompt(parent,missingseasons)
+                foundseason = seasonprompt(parent,missingseasons)
+        if foundseason is False:
+            vprint('Ignoring %s'%parent)
+            return
         vprint('\033[1m%s\033[0m'%parent)
-        execute(path,showid or foundshowid,season or foundseason)
+        execute(path,showid or foundshowid,foundseason)
 # If it contains seasons, rename the folders and go through each
     elif levels == 1:
         os.chdir('..')
@@ -539,41 +546,39 @@ def process_directories(root):
         if not showid:
             foundshowid = get_showID(path)
         missingseasons = get_seasons(showid or foundshowid)
-        folders.sort()
+        folders = weed_folders(folders)
         # Count up the seasons to see what is missing before doing anything
         for folder in folders:
-            if folder.lower().startswith('season') and len(folder) == 9:
-                foundseason = int(folder[-2:])
-                missingseasons.remove(foundseason)
+            num = parse_season(folder)
+            if num is not None and num in missingseasons:
+                missingseasons.remove(num)
         for folder in folders:
             vprint('\033[1m%s\033[0m'%folder)
             if folder in ignore:
                 vprint('Ignoring %s'%folder)
                 continue
-            if folder.lower().startswith('season'):
-                foundseason = int(folder[-2:])
-                if gentle or preview:
-                    sd = folder
-                else:
-                    sd = 'Season %02d'%(foundseason)
-                    shutil.move(folder,sd)
-                    sd = path+'/'+sd
-                execute(sd,showid or foundshowid,foundseason)
-            else:
+            foundseason = parse_season(folder)
+            if foundseason is None:
+                # Not a "Season NN" folder: ask, or with -S/--assume_season
+                # take the next missing season in alphanumeric order.
                 if sprompt:
-                    foundseason = int(seasonprompt(folder, missingseasons))
-                if not foundseason:
+                    foundseason = seasonprompt(folder, missingseasons)
+                elif missingseasons:
+                    foundseason = missingseasons[0]
+                else:
+                    foundseason = False
+                if foundseason is False:
                     vprint('Ignoring %s'%folder)
                     continue
-                else:
+                if foundseason in missingseasons:
                     missingseasons.remove(foundseason)
-                if gentle or preview:
-                    sd = folder
-                else:
-                    sd = 'Season %02d'%(foundseason)
-                    shutil.move(folder,sd)
-                    sd = path+'/'+sd
-                execute(sd,showid or foundshowid,season or foundseason)
+            if gentle or preview:
+                sd = folder
+            else:
+                sd = 'Season %02d'%(foundseason)
+                shutil.move(folder,sd)
+                sd = path+'/'+sd
+            execute(sd,showid or foundshowid,foundseason)
 # If it contains whole series or greater, recurse through each subfolder:
     elif levels > 1:
         os.chdir(rootpath)
@@ -601,8 +606,9 @@ def execute(sd,showid,season):
     os.chdir(sd)
     failure = rename(old_names,filenames,subs_present,old_subnames,subnames)
     os.chdir('..')
-    if not failure and enable_backup_log:
-        log(sd, old_names, filenames)
+    if not failure:
+        if enable_backup_log and not preview:
+            log(sd, old_names, filenames)
     else:
         show = get_show_data(showid)
         if failure == 1:
@@ -615,7 +621,7 @@ def execute(sd,showid,season):
                     '\nOperation canceled. Series:\033[0m', 0)
             print_show_data(show,None)
         elif failure == 3:
-            vprint('\033[31m\033[lm\nError: Rename would overwrite an existing file.'
+            vprint('\033[31m\033[1m\nError: Rename would overwrite an existing file.'
             '\nOperation canceled for safety.\033[0m', 0)
             print_show_data(show, None)
             return None
